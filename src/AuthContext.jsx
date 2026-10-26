@@ -11,13 +11,13 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
-      if (session?.user) fetchProfile(session.user.id);
+      if (session?.user) fetchProfile(session.user);
       else setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
-      if (session?.user) fetchProfile(session.user.id);
+      if (session?.user) fetchProfile(session.user);
       else {
         setProfile(null);
         setLoading(false);
@@ -27,17 +27,24 @@ export const AuthProvider = ({ children }) => {
     return () => subscription.unsubscribe();
   }, []);
 
-  const fetchProfile = async (userId) => {
+  const fetchProfile = async (currentUser) => {
+    if (!currentUser || !currentUser.id) {
+      setProfile(null);
+      setLoading(false);
+      return;
+    }
+
     try {
+      // Pouze čteme profil - o jeho vytvoření se postarala databáze přes trigger
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('id', userId)
-        .single();
+        .eq('id', currentUser.id)
+        .maybeSingle();
 
       if (error) throw error;
 
-      if (data.is_blocked) {
+      if (data && data.is_blocked) {
         alert('Tento účet byl zablokován.');
         await supabase.auth.signOut();
         setProfile(null);
@@ -45,7 +52,7 @@ export const AuthProvider = ({ children }) => {
         setProfile(data);
       }
     } catch (error) {
-      console.error('Chyba při načítání profilu:', error.message);
+      console.error('Chyba při načítání profilu:', error.message || error);
     } finally {
       setLoading(false);
     }

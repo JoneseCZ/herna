@@ -1,30 +1,34 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { AuthProvider } from './AuthContext';
-import Navbar from './Navbar';
 import Home from './Home';
 import Login from './Login';
 import AdminDashboard from './AdminDashboard';
 import ProtectedRoute from './ProtectedRoute';
 
+function Layout() {
+  return (
+    <div className="min-h-screen w-full bg-black text-white flex flex-col">
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/admin"
+          element={
+            <ProtectedRoute allowedRoles={['moderator', 'admin']}>
+              <AdminDashboard />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <div className="min-h-screen bg-slate-50 text-slate-800">
-          <Navbar />
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/login" element={<Login />} />
-            <Route
-              path="/admin"
-              element={
-                <ProtectedRoute allowedRoles={['moderator', 'admin']}>
-                  <AdminDashboard />
-                </ProtectedRoute>
-              }
-            />
-          </Routes>
-        </div>
+        <Layout />
       </AuthProvider>
     </BrowserRouter>
   );
