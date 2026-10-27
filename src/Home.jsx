@@ -37,7 +37,7 @@ export default function Home() {
     if (profile && profile.role !== 'unassigned') {
       fetchGames();
       fetchCustomFields();
-    } else if (!useAuth().loading) {
+    } else {
       setLoading(false);
     }
   }, [profile]);
