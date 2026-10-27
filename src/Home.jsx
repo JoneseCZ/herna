@@ -32,15 +32,22 @@ export default function Home() {
   const [requestSent, setRequestSent] = useState(false);
   const [filterType, setFilterType] = useState('all');
 
+  // 1. Řízení načítání profilu a dat
   useEffect(() => {
-    // Načítáme data pouze pokud uživatel NENÍ unassigned
     if (profile && profile.role !== 'unassigned') {
       fetchGames();
       fetchCustomFields();
-    } else {
+    } else if (!useAuth().loading) {
       setLoading(false);
     }
   }, [profile]);
+
+  // 2. Přesměrování nepřihlášeného uživatele na přihlášení
+  useEffect(() => {
+    if (!loading && !user) {
+      navigate('/login');
+    }
+  }, [user, loading, navigate]);
 
   const fetchGames = async () => {
     setLoading(true);
@@ -143,7 +150,7 @@ export default function Home() {
     }
   };
 
-  const isUnassigned = !profile?.role || profile?.role === 'unassigned';
+   const isUnassigned = user && profile?.role === 'unassigned';
 
   const getRoleInfo = (role) => {
     switch (role) {
