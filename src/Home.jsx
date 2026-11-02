@@ -295,9 +295,17 @@ export default function Home() {
     if (error) {
       setSettingsError('Chyba při změně hesla: ' + error.message);
     } else {
-      setSettingsMsg('✅ Heslo bylo úspěšně změněno!');
-      setNewPassword('');
-      setConfirmPassword('');
+      // 1. Vyčistíme příznak z paměti
+      sessionStorage.removeItem('reset_password_mode');
+      
+      // 2. Odhlásíme uživatele, aby musel projít novým přihlášením
+      await supabase.auth.signOut();
+
+      // 3. Zavřeme modální okno
+      setShowSettingsModal(false);
+
+      // 4. Přesměrujeme na přihlašovací stránku
+      navigate('/login');
     }
   };
 
