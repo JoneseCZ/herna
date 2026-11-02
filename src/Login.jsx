@@ -89,9 +89,18 @@ export default function Login() {
 
   useEffect(() => {
     const hash = window.location.hash;
+    const queryParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(hash.replace('#', '?'));
     const isResetMode = sessionStorage.getItem('reset_password_mode');
 
-    if (isResetMode === 'true' || (hash && hash.includes('type=recovery'))) {
+    // Okamžitá detekce recovery tokenu z URL nebo paměti
+    if (
+      isResetMode === 'true' || 
+      (hash && (hash.includes('type=recovery') || hash.includes('access_token'))) ||
+      queryParams.get('type') === 'recovery' || 
+      hashParams.get('type') === 'recovery'
+    ) {
+      sessionStorage.setItem('reset_password_mode', 'true');
       setIsForgotPassword(true);
       setMessage('Zadej své nové heslo níže.');
     }
