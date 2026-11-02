@@ -11,17 +11,17 @@ function Layout() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // 1. Zkontrolujeme URL hash hned při načtení Layoutu
+    // Okamžitá kontrola URL při načtení
     const hash = window.location.hash;
     if (hash && hash.includes('type=recovery')) {
       sessionStorage.setItem('reset_password_mode', 'true');
     }
 
-    // 2. Posluchač pro Supabase událost změny hesla
+    // Posluchač pro Supabase auth události
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'PASSWORD_RECOVERY') {
         sessionStorage.setItem('reset_password_mode', 'true');
-        navigate('/'); // Zajistí, že uživatel bude na hlavní stránce, kde se okno otevře
+        navigate('/'); // Vynutíme pobyt na hlavní stránce
       }
     });
 
