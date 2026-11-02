@@ -7,6 +7,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: false, // Zabrání automatickému ukládání přihlášení do prohlížeče
     autoRefreshToken: true,
-    detectSessionInUrl: false
+    detectSessionInUrl: true, // Detekuje session v URL (např. po resetu hesla)
   }
 });
