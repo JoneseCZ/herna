@@ -74,9 +74,10 @@ export default function Home() {
     if (isResetMode === 'true' || (hash && hash.includes('type=recovery'))) {
       setShowSettingsModal(true);
       setSettingsMsg('Zadej své nové heslo níže.');
-      // Vyčistíme hash v URL, ať tam zbytečně straší
-      if (history.replaceState) {
-        history.replaceState(null, null, window.location.pathname);
+      sessionStorage.removeItem('reset_password_mode'); // Vyčistíme příznak
+      
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, null, window.location.pathname);
       }
     }
   }, []);

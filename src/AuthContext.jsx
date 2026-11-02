@@ -9,7 +9,13 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // 1. Zachycení Supabase události pro obnovení hesla z e-mailu
+    // 1. Okamžitá kontrola URL hash parametrů při načtení (recovery token z e-mailu)
+    const hash = window.location.hash;
+    if (hash && (hash.includes('type=recovery') || hash.includes('access_token'))) {
+      sessionStorage.setItem('reset_password_mode', 'true');
+    }
+
+    // 2. Posluchač změn stavu přihlášení Supabase
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'PASSWORD_RECOVERY') {
         sessionStorage.setItem('reset_password_mode', 'true');
@@ -24,7 +30,7 @@ export const AuthProvider = ({ children }) => {
       }
     });
 
-    // 2. Kontrola počáteční session při načtení
+    // 3. Načtení počáteční session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {

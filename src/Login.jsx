@@ -88,14 +88,15 @@ export default function Login() {
   };
 
   useEffect(() => {
-    // Zachycení tokenu pro obnovu hesla z URL (hash nebo query parametry)
     const hash = window.location.hash;
-    if (hash && hash.includes('type=recovery')) {
+    const isResetMode = sessionStorage.getItem('reset_password_mode');
+
+    if (isResetMode === 'true' || (hash && hash.includes('type=recovery'))) {
       setIsForgotPassword(true);
-      setMessage('Zadej své nové heslo.');
+      setMessage('Zadej své nové heslo níže.');
     }
   }, []);
-  
+
   // Zachycení pokusu o obnovení hesla z URL při startu přihlášení
   useEffect(() => {
     const queryParams = new URLSearchParams(window.location.search);
