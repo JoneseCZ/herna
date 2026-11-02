@@ -68,10 +68,16 @@ export default function Home() {
 
   // Automatické otevření modálního okna pro změnu hesla při příchodu z e-mailu
   useEffect(() => {
+    const hash = window.location.hash;
     const isResetMode = sessionStorage.getItem('reset_password_mode');
-    if (isResetMode === 'true') {
+    
+    if (isResetMode === 'true' || (hash && hash.includes('type=recovery'))) {
       setShowSettingsModal(true);
-      sessionStorage.removeItem('reset_password_mode');
+      setSettingsMsg('Zadej své nové heslo níže.');
+      // Vyčistíme hash v URL, ať tam zbytečně straší
+      if (history.replaceState) {
+        history.replaceState(null, null, window.location.pathname);
+      }
     }
   }, []);
 
