@@ -56,6 +56,14 @@ export default function Home() {
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
 
+  // Okamžitá detekce recovery tokenu při startu (uloží příznak do sessionStorage)
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (hash && (hash.includes('type=recovery') || hash.includes('access_token'))) {
+      sessionStorage.setItem('reset_password_mode', 'true');
+    }
+  }, []);
+
   // 1. Řízení načítání profilu a dat
   useEffect(() => {
     if (profile && profile.role !== 'unassigned') {
@@ -220,8 +228,17 @@ export default function Home() {
     }
   }, [profile]);
 
+  // OPRAVA: Kontrola přihlášení s výjimkou pro obnovu hesla
   useEffect(() => {
     if (!loading && !user) {
+      const hash = window.location.hash;
+      const isResetMode = sessionStorage.getItem('reset_password_mode');
+      
+      // Pokud probíhá obnova hesla, neposíláme uživatele na /login
+      if (isResetMode === 'true' || (hash && hash.includes('type=recovery'))) {
+        return;
+      }
+      
       navigate('/login');
     }
   }, [user, loading, navigate]);
