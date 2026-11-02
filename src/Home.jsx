@@ -174,6 +174,7 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [activeLeaderboardInfo]);
 
+  // Automatické otevření modálního okna pro změnu hesla při příchodu z e-mailu
   useEffect(() => {
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event) => {
       if (event === 'PASSWORD_RECOVERY') {
@@ -185,6 +186,7 @@ export default function Home() {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
 
   useEffect(() => {
     if (profile?.role && profile.role !== 'unassigned' && profile.role !== 'reader' && profile.role !== 'ctenar') {
