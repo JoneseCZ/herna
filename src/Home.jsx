@@ -74,8 +74,9 @@ export default function Home() {
     if (isResetMode === 'true' || (hash && hash.includes('type=recovery'))) {
       setShowSettingsModal(true);
       setSettingsMsg('Zadej své nové heslo níže.');
-      sessionStorage.removeItem('reset_password_mode'); // Vyčistíme příznak
+      sessionStorage.removeItem('reset_password_mode');
       
+      // Vyčištění URL od citlivého hashe
       if (window.history && window.history.replaceState) {
         window.history.replaceState(null, null, window.location.pathname);
       }
