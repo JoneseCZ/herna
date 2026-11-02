@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { useNavigate } from 'react-router-dom';
 
 export default function Login() {
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -20,7 +21,26 @@ export default function Login() {
     setLoading(true);
 
     try {
-      if (isSignUp) {
+      if (isForgotPassword) {
+        if (!username.trim()) {
+          throw new Error('Zadej prosím své uživatelské jméno.');
+        }
+
+        // 1. Zjistíme e-mail podle uživatelského jména
+        const { data: userEmail, error: rpcError } = await supabase
+          .rpc('get_email_by_username', { p_username: username.trim() });
+
+        if (rpcError) throw rpcError;
+        if (!userEmail) throw new Error('Uživatelské jméno neexistuje.');
+
+        // 2. Odešleme požadavek na reset hesla do Supabase
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(userEmail, {
+          redirectTo: window.location.origin, // nebo cesta kam uživatele přesměrovat
+        });
+
+        if (resetError) throw resetError;
+        setMessage('Odkaz pro obnovení hesla byl odeslán na e-mail přiřazený k tomuto účtu.');
+      } else if (isSignUp) {
         const { data: existingUser, error: checkError } = await supabase
           .from('profiles')
           .select('username')
@@ -32,15 +52,15 @@ export default function Login() {
           throw new Error('Toto uživatelské jméno je již obsazené.');
         }
 
-        const { data, error } = await supabase.auth.signUp({
-  email: email,
-  password: password,
-  options: {
-    data: {
-      username: username, // Tímto se hodnota předá do raw_user_meta_data v Supabase
-    },
-  },
-});
+        const { error } = await supabase.auth.signUp({
+          email: email,
+          password: password,
+          options: {
+            data: {
+              username: username,
+            },
+          },
+        });
 
         if (error) throw error;
         setMessage('Registrace proběhla úspěšně! Nyní se můžeš přihlásit.');
@@ -66,6 +86,17 @@ export default function Login() {
       setLoading(false);
     }
   };
+
+  // Zachycení pokusu o obnovení hesla z URL při startu přihlášení
+  useEffect(() => {
+    const queryParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace('#', '?'));
+    
+    if (queryParams.get('type') === 'recovery' || hashParams.get('type') === 'recovery') {
+      setIsForgotPassword(true);
+      setMessage('Zadej své nové heslo níže.');
+    }
+  }, []);
 
   // Styl pro černý text s bílým obtažením
   const blackWithWhiteStroke = {
@@ -125,12 +156,10 @@ export default function Login() {
 
       {/* Formulář */}
       <div style={{ position: 'relative', zIndex: 10, width: '100%', maxWidth: '300px', margin: '16px', padding: '16px', color: 'white' }}>
-        {/* Nadpis posunutý výše */}
         <h1 style={{ fontSize: '32px', fontWeight: 'bold', textAlign: 'center', color: '#fde047', marginTop: '-35px', marginBottom: '52px', textShadow: '0 3px 6px rgba(0,0,0,0.9)' }}>
           Databáze her
         </h1>
         
-      
         {errorMsg && (
           <div style={{ backgroundColor: 'rgba(127, 29, 29, 0.9)', color: '#fecaca', padding: '10px', borderRadius: '6px', fontSize: '13px', marginBottom: '16px' }}>
             {errorMsg}
@@ -170,29 +199,42 @@ export default function Login() {
             </div>
           )}
 
-          <div>
-            <label style={{ display: 'block', fontSize: '14px', fontWeight: 'bold', color: '#fde047', marginBottom: '4px', textAlign: 'center', textShadow: '0 2px 5px rgba(0,0,0,0.9)' }}>Heslo</label>
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              style={{ width: '100%', padding: '10px 14px', backgroundColor: 'rgba(0, 0, 0, 0.8)', border: '1px solid rgba(255, 255, 255, 0.5)', borderRadius: '6px', outline: 'none', color: 'white', boxSizing: 'border-box', fontFamily: 'inherit', textAlign: 'center', fontWeight: 'bold' }}
-            />
-          </div>
+          {!isForgotPassword && (
+            <div>
+              <label style={{ display: 'block', fontSize: '14px', fontWeight: 'bold', color: '#fde047', marginBottom: '4px', textAlign: 'center', textShadow: '0 2px 5px rgba(0,0,0,0.9)' }}>Heslo</label>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                style={{ width: '100%', padding: '10px 14px', backgroundColor: 'rgba(0, 0, 0, 0.8)', border: '1px solid rgba(255, 255, 255, 0.5)', borderRadius: '6px', outline: 'none', color: 'white', boxSizing: 'border-box', fontFamily: 'inherit', textAlign: 'center', fontWeight: 'bold' }}
+              />
+            </div>
+          )}
 
           <button
             type="submit"
             disabled={loading}
             style={{ width: '100%', backgroundColor: '#d97706', color: 'white', fontWeight: 'bold', padding: '12px', borderRadius: '6px', border: 'none', cursor: 'pointer', marginTop: '6px', fontFamily: 'inherit', fontSize: '15px', textShadow: '0 1px 2px rgba(0,0,0,0.5)', opacity: loading ? 0.5 : 1 }}
           >
-            {loading ? 'Zpracovávám...' : isSignUp ? 'Zaregistrovat se' : 'Přihlásit se'}
+            {loading ? 'Zpracovávám...' : isForgotPassword ? 'Odeslat odkaz pro obnovení' : isSignUp ? 'Zaregistrovat se' : 'Přihlásit se'}
           </button>
         </form>
 
-        <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', ...blackWithWhiteStroke }}>
-          {isSignUp ? (
+        <div style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', display: 'flex', flexDirection: 'column', gap: '8px', ...blackWithWhiteStroke }}>
+          {isForgotPassword ? (
+            <p>
+              Vzpomněl sis na heslo?{' '}
+              <button
+                type="button"
+                onClick={() => { setIsForgotPassword(false); setErrorMsg(''); setMessage(''); }}
+                style={whiteBoldLink}
+              >
+                Přejít na přihlášení
+              </button>
+            </p>
+          ) : isSignUp ? (
             <p>
               Již máš účet?{' '}
               <button
@@ -204,16 +246,27 @@ export default function Login() {
               </button>
             </p>
           ) : (
-            <p>
-              Nemáš ještě účet?{' '}
-              <button
-                type="button"
-                onClick={() => { setIsSignUp(true); setErrorMsg(''); setMessage(''); }}
-                style={whiteBoldLink}
-              >
-                Zaregistruj se
-              </button>
-            </p>
+            <>
+              <p>
+                Nemáš ještě účet?{' '}
+                <button
+                  type="button"
+                  onClick={() => { setIsSignUp(true); setErrorMsg(''); setMessage(''); }}
+                  style={whiteBoldLink}
+                >
+                  Zaregistruj se
+                </button>
+              </p>
+              <p style={{ marginTop: '4px' }}>
+                <button
+                  type="button"
+                  onClick={() => { setIsForgotPassword(true); setErrorMsg(''); setMessage(''); }}
+                  style={whiteBoldLink}
+                >
+                  Zapomněl jsi heslo?
+                </button>
+              </p>
+            </>
           )}
         </div>
       </div>

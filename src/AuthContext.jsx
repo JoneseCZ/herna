@@ -9,17 +9,27 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // 1. Zachycení Supabase události pro obnovení hesla z e-mailu
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        sessionStorage.setItem('reset_password_mode', 'true');
+      }
+      
       setUser(session?.user ?? null);
-      if (session?.user) fetchProfile(session.user);
-      else setLoading(false);
+      if (session?.user) {
+        await fetchProfile(session.user);
+      } else {
+        setProfile(null);
+        setLoading(false);
+      }
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    // 2. Kontrola počáteční session při načtení
+    supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
-      if (session?.user) fetchProfile(session.user);
-      else {
-        setProfile(null);
+      if (session?.user) {
+        fetchProfile(session.user);
+      } else {
         setLoading(false);
       }
     });
@@ -35,7 +45,6 @@ export const AuthProvider = ({ children }) => {
     }
 
     try {
-      // Pouze čteme profil - o jeho vytvoření se postarala databáze přes trigger
       const { data, error } = await supabase
         .from('profiles')
         .select('*')
