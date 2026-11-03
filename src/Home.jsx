@@ -121,10 +121,12 @@ export default function Home() {
         const periodUserGames = allApprovedGames ? allApprovedGames.filter(g => {
           const isUser = String(g.created_by) === String(u.id);
           if (!isUser) return false;
-          if (activeData?.created_at) {
-            return new Date(g.created_at) >= new Date(activeData.created_at);
-          }
-          return true;
+          
+          // Pokud nemáme aktivní žebříček (kolo bylo uzavřeno), v aktuálním kole je 0 her
+          if (!activeData || !activeData.created_at) return false;
+
+          // Jinak počítáme hry vytvořené od spuštění aktuálního kola
+          return new Date(g.created_at) >= new Date(activeData.created_at);
         }).length : 0;
 
         return { 
@@ -1494,15 +1496,15 @@ export default function Home() {
                   ) : (
                     <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '24px', display: 'flex', flexWrap: 'wrap', gap: '12px 16px', borderBottom: '1px solid rgba(245, 158, 11, 0.25)', paddingBottom: '16px' }}>
                       {selectedGame.players_count && <span>👥 <strong>Hráči:</strong> {selectedGame.players_count}</span>}
-                      {selectedGame.duration && <span>⏱️ <strong>Délka:</strong> {selectedGame.duration}</span>}
-                      {selectedGame.preparation && <span>🛠️ <strong>Příprava:</strong> {selectedGame.preparation}</span>}
+                      {selectedGame.duration && <span><strong>Délka:</strong> {selectedGame.duration}</span>}
+                      {selectedGame.preparation && <span><strong>Příprava:</strong> {selectedGame.preparation}</span>}
                       {selectedGame.environment && (
                         <span>
-                          📍 <strong>Prostředí:</strong> {typeof selectedGame.environment === 'string' ? selectedGame.environment.replace(/[\[\]"]/g, '') : selectedGame.environment}
+                           <strong>Prostředí:</strong> {typeof selectedGame.environment === 'string' ? selectedGame.environment.replace(/[\[\]"]/g, '') : selectedGame.environment}
                         </span>
                       )}
-                      {selectedGame.equipment && <span>🎒 <strong>Pomůcky:</strong> {selectedGame.equipment}</span>}
-                      {selectedGame.required_items && <span>🎒 <strong>S sebou:</strong> {selectedGame.required_items}</span>}
+                      {selectedGame.equipment && <span><strong>Pomůcky:</strong> {selectedGame.equipment}</span>}
+                      {selectedGame.required_items && <span><strong>S sebou:</strong> {selectedGame.required_items}</span>}
 
                       {selectedGame.custom_data && Object.keys(selectedGame.custom_data).length > 0 && (
                         Object.entries(selectedGame.custom_data).map(([key, val]) => (
