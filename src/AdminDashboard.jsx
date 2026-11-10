@@ -7,6 +7,7 @@ export default function AdminDashboard() {
   const { profile } = useAuth();
   const navigate = useNavigate();
   const [pendingGames, setPendingGames] = useState([]);
+  const [pendingAlternatives, setPendingAlternatives] = useState([]);
   const [users, setUsers] = useState([]);
   const [customFields, setCustomFields] = useState([]);
   const [newFieldName, setNewFieldName] = useState('');
@@ -20,9 +21,12 @@ export default function AdminDashboard() {
   const [activeLeaderboard, setActiveLeaderboard] = useState(null);
   const [historyList, setHistoryList] = useState([]);
   const [pointInputs, setPointInputs] = useState({});
+  const [gamePointsInput, setGamePointsInput] = useState({});
+  const [altPointsInput, setAltPointsInput] = useState({});
 
   useEffect(() => {
     fetchPendingGames();
+    fetchPendingAlternatives();
     fetchCustomFields();
     fetchActiveLeaderboard();
     fetchHistory();
@@ -37,6 +41,44 @@ export default function AdminDashboard() {
       .order('created_at', { ascending: false });
 
     if (data) setPendingGames(data);
+  };
+
+  const fetchPendingAlternatives = async () => {
+    // 1. Načteme pouze čistá data z tabulky game_alternatives (bez joinu, který hází chybu)
+    const { data: altData, error: altError } = await supabase
+      .from('game_alternatives')
+      .select('*')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false });
+
+    if (altError) {
+      console.error('Chyba při načítání alternativ:', altError.message);
+      return;
+    }
+
+    if (altData && altData.length > 0) {
+      // 2. Získáme unikátní ID her, které tyto alternativy mají
+      const gameIds = [...new Set(altData.map(a => a.game_id))];
+
+      // 3. Načteme názvy těchto her samostatně
+      const { data: gamesData } = await supabase
+        .from('games')
+        .select('id, title')
+        .in('id', gameIds);
+
+      // 4. Spojíme data dohromady v JavaScriptu
+      const combined = altData.map(alt => {
+        const foundGame = gamesData?.find(g => g.id === alt.game_id);
+        return {
+          ...alt,
+          games: { title: foundGame ? foundGame.title : 'Neznámá hra' }
+        };
+      });
+
+      setPendingAlternatives(combined);
+    } else {
+      setPendingAlternatives([]);
+    }
   };
 
   const fetchUsers = async () => {
@@ -65,7 +107,6 @@ export default function AdminDashboard() {
       setActiveLeaderboard(data);
       setLeaderboardTitle(data.title || '');
       if (data.ends_at) {
-        // Převedení ISO formátu na format pro datetime-local input
         const d = new Date(data.ends_at);
         d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
         setLeaderboardEndsAt(d.toISOString().slice(0, 16));
@@ -81,9 +122,76 @@ export default function AdminDashboard() {
     if (data) setHistoryList(data);
   };
 
-  const handleApproveGame = async (gameId, newStatus) => {
-    await supabase.from('games').update({ status: newStatus }).eq('id', gameId);
+  const handleApproveGame = async (gameId, newStatus, authorId, assignedPoints) => {
+    const pointsToAward = parseInt(assignedPoints || 10, 10);
+
+    await supabase
+      .from('games')
+      .update({ status: newStatus, points: pointsToAward })
+      .eq('id', gameId);
+
+    if (newStatus === 'approved' && authorId) {
+      const { data: authorProfile } = await supabase
+        .from('profiles')
+        .select('points')
+        .eq('id', authorId)
+        .maybeSingle();
+
+      const currentPoints = authorProfile?.points || 0;
+
+      await supabase
+        .from('profiles')
+        .update({ points: currentPoints + pointsToAward })
+        .eq('id', authorId);
+    }
+
     fetchPendingGames();
+  };
+
+  const handleApproveAlternative = async (altId, gameId, altContent, status, authorId, assignedPoints) => {
+    const pointsToAward = parseInt(assignedPoints || 5, 10);
+
+    if (status === 'approved') {
+      // 1. Načteme aktuální alternativy hry
+      const { data: gameData } = await supabase
+        .from('games')
+        .select('alternatives')
+        .eq('id', gameId)
+        .single();
+
+      const currentAlternatives = gameData?.alternatives || [];
+      const updatedAlternatives = [...currentAlternatives, altContent];
+
+      // 2. Uložíme alternativu k dané hře
+      await supabase
+        .from('games')
+        .update({ alternatives: updatedAlternatives })
+        .eq('id', gameId);
+
+      // 3. Přičteme body autorovi alternativy
+      if (authorId) {
+        const { data: authorProfile } = await supabase
+          .from('profiles')
+          .select('points')
+          .eq('id', authorId)
+          .maybeSingle();
+
+        const currentPoints = authorProfile?.points || 0;
+
+        await supabase
+          .from('profiles')
+          .update({ points: currentPoints + pointsToAward })
+          .eq('id', authorId);
+      }
+    }
+
+    // 4. Změníme status alternativy na approved / rejected
+    await supabase
+      .from('game_alternatives')
+      .update({ status: status })
+      .eq('id', altId);
+
+    fetchPendingAlternatives();
   };
 
   const handleChangeRole = async (userId, newRole) => {
@@ -116,13 +224,30 @@ export default function AdminDashboard() {
   };
 
   const handleSaveEditedGame = async (gameId) => {
+    const gameToUpdate = pendingGames.find(g => g.id === gameId);
+    if (!gameToUpdate) return;
+
+    const updatedPayload = {
+      title: editForm.title ?? gameToUpdate.title,
+      description: editForm.description ?? gameToUpdate.description,
+      players_count: editForm.players_count ?? gameToUpdate.players_count,
+      duration: editForm.duration ?? gameToUpdate.duration,
+      preparation: editForm.preparation ?? gameToUpdate.preparation,
+      environment: editForm.environment ?? gameToUpdate.environment,
+      equipment: editForm.equipment ?? gameToUpdate.equipment,
+      required_items: editForm.required_items ?? gameToUpdate.required_items,
+      note: editForm.note ?? gameToUpdate.note,
+    };
+
     const { error } = await supabase
       .from('games')
-      .update(editForm)
+      .update(updatedPayload)
       .eq('id', gameId);
 
     if (!error) {
+      alert('✅ Úpravy hry byly úspěšně uloženy!');
       setEditingGameId(null);
+      setEditForm({});
       fetchPendingGames();
     } else {
       alert('Chyba při ukládání úprav: ' + error.message);
@@ -148,14 +273,12 @@ export default function AdminDashboard() {
     if (!error) fetchCustomFields();
   };
 
-  // Uložení / Spuštění odpočtu pro aktuální kolo
   const handleSaveActiveLeaderboard = async () => {
     if (!leaderboardEndsAt) {
       alert('⚠️ Zvol prosím datum a čas ukončení.');
       return;
     }
 
-    // Převedeme hodnotu z inputu (která je v lokálním čase) na standardní ISO řetězec správně
     const localDate = new Date(leaderboardEndsAt);
 
     await supabase.from('active_leaderboard').delete().neq('id', 0);
@@ -175,11 +298,9 @@ export default function AdminDashboard() {
     }
   };
 
-  // Uzavření žebříčku, uložení do historie, reset bodů a spuštění/aktualizace
   const handleCloseLeaderboard = async () => {
     if (!confirm(`Opravdu chceš uzavřít žebříček "${leaderboardTitle}", uložit výsledky do historie a VYNULOVAT BODY všem hráčům?`)) return;
 
-    // 1. Načtení aktuálních uživatelů a jejich bodů pro snapshot
     const { data: currentUsers } = await supabase
       .from('profiles')
       .select('id, username, points')
@@ -187,7 +308,6 @@ export default function AdminDashboard() {
 
     if (!currentUsers) return;
 
-    // 2. Uložení aktuálních výsledků do historie
     const { error: historyError } = await supabase.from('leaderboard_history').insert([
       {
         title: leaderboardTitle || 'Ukončený žebříček',
@@ -201,7 +321,6 @@ export default function AdminDashboard() {
       return;
     }
 
-    // 3. Vynulování bodů všem uživatelům v profiles
     const { error: resetError } = await supabase
       .from('profiles')
       .update({ points: 0 })
@@ -211,6 +330,8 @@ export default function AdminDashboard() {
       alert('Chyba při vynulování bodů hráčů: ' + resetError.message);
       return;
     }
+
+    await supabase.from('active_leaderboard').delete().neq('id', 0);
 
     alert('🎉 Žebříček byl uzavřen, výsledky uloženy do historie a body všem hráčům byly vynulovány na 0!');
     fetchHistory();
@@ -275,7 +396,7 @@ export default function AdminDashboard() {
               borderBottom: activeTab === 'games' ? '2px solid #fde047' : '2px solid transparent'
             }}
           >
-            Schvalování her ({pendingGames.length})
+            Schvalování her ({pendingGames.length + pendingAlternatives.length})
           </button>
 
           {profile?.role === 'admin' && (
@@ -351,12 +472,18 @@ export default function AdminDashboard() {
           )}
         </div>
 
-        {/* 1. ZÁLOŽKA: Schvalování her */}
+        {/* 1. ZÁLOŽKA: Schvalování her A alternativ */}
         {activeTab === 'games' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            
+            {/* HERNI NÁVRHY */}
+            <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#fde047', margin: 0 }}>
+              Nové hry ke schválení ({pendingGames.length})
+            </h3>
+
             {pendingGames.length === 0 ? (
-              <div style={{ backgroundColor: 'rgba(0,0,0,0.8)', padding: '32px', borderRadius: '16px', textAlign: 'center', border: '1px solid rgba(255,255,255,0.1)' }}>
-                <p style={{ color: '#d1d5db', margin: 0 }}>Žádné hry nečekají na schválení.</p>
+              <div style={{ backgroundColor: 'rgba(0,0,0,0.8)', padding: '20px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <p style={{ color: '#d1d5db', margin: 0, fontSize: '13px' }}>Žádné nové hry nečekají na schválení.</p>
               </div>
             ) : (
               pendingGames.map((game) => {
@@ -365,16 +492,9 @@ export default function AdminDashboard() {
                   <div key={game.id} style={{ backgroundColor: 'rgba(0,0,0,0.85)', padding: '24px', borderRadius: '16px', border: '1px solid rgba(245, 158, 11, 0.4)', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)' }}>
                     
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px', gap: '12px', flexWrap: 'wrap' }}>
-                      {isEditing ? (
-                        <input
-                          type="text"
-                          value={editForm.title ?? game.title}
-                          onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
-                          style={{ fontSize: '18px', fontWeight: 'bold', backgroundColor: 'rgba(17, 24, 39, 0.9)', border: '1px solid #fde047', borderRadius: '6px', color: 'white', padding: '6px 10px', width: '100%', maxWidth: '400px', fontFamily: 'inherit' }}
-                        />
-                      ) : (
-                        <h3 style={{ fontSize: '20px', fontWeight: 'bold', color: '#fde047', margin: 0 }}>{game.title}</h3>
-                      )}
+                      <h3 style={{ fontSize: '20px', fontWeight: 'bold', color: '#fde047', margin: 0 }}>
+                        {isEditing ? (editForm.title ?? game.title) : game.title}
+                      </h3>
 
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <span style={{ backgroundColor: 'rgba(146, 64, 14, 0.8)', color: '#fde047', fontSize: '12px', padding: '4px 10px', borderRadius: '9999px', fontWeight: 'bold', border: '1px solid rgba(245, 158, 11, 0.5)' }}>
@@ -393,7 +513,7 @@ export default function AdminDashboard() {
                           </button>
                         ) : (
                           <button
-                            onClick={() => setEditingGameId(null)}
+                            onClick={() => { setEditingGameId(null); setEditForm({}); }}
                             style={{ backgroundColor: '#374151', color: 'white', border: 'none', padding: '5px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px', fontFamily: 'inherit' }}
                           >
                             Zrušit úpravy
@@ -402,14 +522,25 @@ export default function AdminDashboard() {
                       </div>
                     </div>
 
-                    {game.note && (
+                    {game.note && !isEditing && (
                       <div style={{ backgroundColor: 'rgba(180, 83, 9, 0.25)', border: '1px solid rgba(245, 158, 11, 0.7)', padding: '10px 14px', borderRadius: '8px', fontSize: '13px', marginBottom: '16px', color: '#fef3c7' }}>
                         <strong style={{ color: '#fde047' }}>💡 Vzkaz / Požadavek:</strong> {game.note}
                       </div>
                     )}
 
+                    {/* EDITOVACÍ FORMULÁŘ */}
                     {isEditing ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px', backgroundColor: 'rgba(17, 24, 39, 0.6)', padding: '16px', borderRadius: '10px', border: '1px solid #374151' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px', backgroundColor: 'rgba(17, 24, 39, 0.8)', padding: '16px', borderRadius: '12px', border: '1px solid #374151' }}>
+                        <div>
+                          <label style={{ fontSize: '12px', color: '#fde047', display: 'block', marginBottom: '4px' }}>Název hry</label>
+                          <input
+                            type="text"
+                            value={editForm.title ?? game.title}
+                            onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                            style={{ width: '100%', fontSize: '15px', fontWeight: 'bold', backgroundColor: '#000', border: '1px solid #fde047', borderRadius: '6px', color: 'white', padding: '8px 10px', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                          />
+                        </div>
+
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                           <div>
                             <label style={{ fontSize: '12px', color: '#9ca3af', display: 'block', marginBottom: '4px' }}>Počet hráčů</label>
@@ -417,7 +548,7 @@ export default function AdminDashboard() {
                               type="text"
                               value={editForm.players_count ?? game.players_count ?? ''}
                               onChange={(e) => setEditForm({ ...editForm, players_count: e.target.value })}
-                              style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit' }}
+                              style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
                             />
                           </div>
                           <div>
@@ -426,43 +557,121 @@ export default function AdminDashboard() {
                               type="text"
                               value={editForm.duration ?? game.duration ?? ''}
                               onChange={(e) => setEditForm({ ...editForm, duration: e.target.value })}
-                              style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit' }}
+                              style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
                             />
                           </div>
                         </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                          <div>
+                            <label style={{ fontSize: '12px', color: '#9ca3af', display: 'block', marginBottom: '4px' }}>Pomůcky</label>
+                            <input
+                              type="text"
+                              value={editForm.equipment ?? game.equipment ?? ''}
+                              onChange={(e) => setEditForm({ ...editForm, equipment: e.target.value })}
+                              style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                            />
+                          </div>
+                          <div>
+                            <label style={{ fontSize: '12px', color: '#9ca3af', display: 'block', marginBottom: '4px' }}>S sebou</label>
+                            <input
+                              type="text"
+                              value={editForm.required_items ?? game.required_items ?? ''}
+                              onChange={(e) => setEditForm({ ...editForm, required_items: e.target.value })}
+                              style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '12px', color: '#fde047', display: 'block', marginBottom: '6px' }}>Příprava</label>
+                          <div style={{ display: 'flex', gap: '16px' }}>
+                            {['Bez přípravy', 'Lehká', 'Složitá'].map((opt) => (
+                              <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: 'white' }}>
+                                <input
+                                  type="radio"
+                                  name={`edit_prep_${game.id}`}
+                                  value={opt}
+                                  checked={(editForm.preparation ?? game.preparation) === opt}
+                                  onChange={(e) => setEditForm({ ...editForm, preparation: e.target.value })}
+                                />
+                                {opt}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '12px', color: '#fde047', display: 'block', marginBottom: '6px' }}>Vhodné prostředí</label>
+                          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                            {['Venku', 'Běhací', 'Dovnitř', 'Den', 'Noc'].map((envOpt) => {
+                              const currentEnv = editForm.environment ?? game.environment ?? [];
+                              const isChecked = Array.isArray(currentEnv) ? currentEnv.includes(envOpt) : String(currentEnv).includes(envOpt);
+                              
+                              return (
+                                <label key={envOpt} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '12px', backgroundColor: 'rgba(31, 41, 55, 0.8)', padding: '4px 8px', borderRadius: '4px', border: '1px solid #374151', color: 'white' }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => {
+                                      let updatedEnv = Array.isArray(currentEnv) ? [...currentEnv] : [currentEnv];
+                                      if (isChecked) {
+                                        updatedEnv = updatedEnv.filter(item => item !== envOpt);
+                                      } else {
+                                        updatedEnv.push(envOpt);
+                                      }
+                                      setEditForm({ ...editForm, environment: updatedEnv });
+                                    }}
+                                  />
+                                  {envOpt}
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '12px', color: '#9ca3af', display: 'block', marginBottom: '4px' }}>Pravidla a popis hry</label>
+                          <textarea
+                            rows="6"
+                            value={editForm.description ?? game.description}
+                            onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                            style={{ width: '100%', padding: '10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '8px', color: 'white', fontSize: '14px', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: '1.5' }}
+                          />
+                        </div>
+
+                        <div>
+                          <label style={{ fontSize: '12px', color: '#9ca3af', display: 'block', marginBottom: '4px' }}>Poznámka autoru</label>
+                          <input
+                            type="text"
+                            value={editForm.note ?? game.note ?? ''}
+                            onChange={(e) => setEditForm({ ...editForm, note: e.target.value })}
+                            style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                          />
+                        </div>
                       </div>
                     ) : (
-                      <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                        {game.players_count && <span>👥 {game.players_count}</span>}
-                        {game.duration && <span>⏱️ {game.duration}</span>}
-                        {game.preparation && <span>🛠️ {game.preparation}</span>}
-                        {game.environment && (
-                          <span>
-                            📍 Prostředí: {typeof game.environment === 'string' ? game.environment.replace(/[\[\]"]/g, '') : game.environment}
-                          </span>
-                        )}
-                        {game.equipment && <span>🎒 Pomůcky: {game.equipment}</span>}
-                        {game.required_items && <span>🎒 S sebou: {game.required_items}</span>}
-                      </div>
+                      <>
+                        <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                          {game.players_count && <span>👥 {game.players_count}</span>}
+                          {game.duration && <span>⏱️ {game.duration}</span>}
+                          {game.preparation && <span>🛠️ {game.preparation}</span>}
+                          {game.environment && (
+                            <span>
+                              📍 Prostředí: {typeof game.environment === 'string' ? game.environment.replace(/[\[\]"]/g, '') : game.environment}
+                            </span>
+                          )}
+                          {game.equipment && <span>🎒 Pomůcky: {game.equipment}</span>}
+                          {game.required_items && <span>🎒 S sebou: {game.required_items}</span>}
+                        </div>
+
+                        <p style={{ color: '#d1d5db', fontSize: '14px', whiteSpace: 'pre-line', lineHeight: '1.6', marginBottom: '20px' }}>
+                          {game.description}
+                        </p>
+                      </>
                     )}
 
-                    {isEditing ? (
-                      <div style={{ marginBottom: '20px' }}>
-                        <label style={{ fontSize: '12px', color: '#9ca3af', display: 'block', marginBottom: '4px' }}>Pravidla a popis hry</label>
-                        <textarea
-                          rows="6"
-                          value={editForm.description ?? game.description}
-                          onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                          style={{ width: '100%', padding: '10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '8px', color: 'white', fontSize: '14px', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: '1.5' }}
-                        />
-                      </div>
-                    ) : (
-                      <p style={{ color: '#d1d5db', fontSize: '14px', whiteSpace: 'pre-line', lineHeight: '1.6', marginBottom: '20px' }}>
-                        {game.description}
-                      </p>
-                    )}
-
-                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
                       {isEditing ? (
                         <button
                           onClick={() => handleSaveEditedGame(game.id)}
@@ -472,14 +681,23 @@ export default function AdminDashboard() {
                         </button>
                       ) : (
                         <>
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <span style={{ fontSize: '13px', color: '#fde047' }}>Body:</span>
+                            <input
+                              type="number"
+                              value={gamePointsInput[game.id] ?? '10'}
+                              onChange={(e) => setGamePointsInput({ ...gamePointsInput, [game.id]: e.target.value })}
+                              style={{ width: '60px', padding: '6px 8px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px' }}
+                            />
+                          </div>
                           <button
-                            onClick={() => handleApproveGame(game.id, 'approved')}
+                            onClick={() => handleApproveGame(game.id, 'approved', game.created_by, gamePointsInput[game.id] || 10)}
                             style={{ backgroundColor: '#059669', color: 'white', fontWeight: 'bold', padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px' }}
                           >
-                            Schválit a publikovat
+                            Schválit a připsat body
                           </button>
                           <button
-                            onClick={() => handleApproveGame(game.id, 'rejected')}
+                            onClick={() => handleApproveGame(game.id, 'rejected', game.created_by, 0)}
                             style={{ backgroundColor: '#dc2626', color: 'white', fontWeight: 'bold', padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px' }}
                           >
                             Zamítnout
@@ -491,6 +709,56 @@ export default function AdminDashboard() {
                 );
               })
             )}
+
+            {/* SEKCIE SCHVALOVÁNÍ ALTERNATIV */}
+            <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#fde047', margin: '24px 0 0 0' }}>
+              Čekající alternativy her ({pendingAlternatives.length})
+            </h3>
+
+            {pendingAlternatives.length === 0 ? (
+              <div style={{ backgroundColor: 'rgba(0,0,0,0.8)', padding: '20px', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <p style={{ color: '#d1d5db', margin: 0, fontSize: '13px' }}>Žádné alternativy nečekají na schválení.</p>
+              </div>
+            ) : (
+              pendingAlternatives.map((alt) => (
+                <div key={alt.id} style={{ backgroundColor: 'rgba(0,0,0,0.85)', padding: '20px', borderRadius: '14px', border: '1px solid rgba(245, 158, 11, 0.4)', marginBottom: '16px' }}>
+                  <div style={{ fontSize: '13px', color: '#fde047', marginBottom: '8px' }}>
+                    Hra: <strong>{alt.games?.title || 'Neznámá hra'}</strong>
+                  </div>
+
+                  <p style={{ fontSize: '14px', color: 'white', backgroundColor: 'rgba(17, 24, 39, 0.8)', padding: '12px', borderRadius: '8px', border: '1px solid #374151', marginBottom: '16px', lineHeight: '1.5' }}>
+                    {alt.content}
+                  </p>
+
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <span style={{ fontSize: '13px', color: '#fde047' }}>Body za alternativu:</span>
+                      <input
+                        type="number"
+                        value={altPointsInput[alt.id] ?? '5'}
+                        onChange={(e) => setAltPointsInput({ ...altPointsInput, [alt.id]: e.target.value })}
+                        style={{ width: '60px', padding: '6px 8px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px' }}
+                      />
+                    </div>
+
+                    <button
+                      onClick={() => handleApproveAlternative(alt.id, alt.game_id, alt.content, 'approved', alt.user_id, altPointsInput[alt.id] || 5)}
+                      style={{ backgroundColor: '#059669', color: 'white', fontWeight: 'bold', padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontSize: '13px' }}
+                    >
+                      Schválit, připojit a připsat body
+                    </button>
+                    
+                    <button
+                      onClick={() => handleApproveAlternative(alt.id, alt.game_id, alt.content, 'rejected', alt.user_id, 0)}
+                      style={{ backgroundColor: '#dc2626', color: 'white', fontWeight: 'bold', padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontSize: '13px' }}
+                    >
+                      Zamítnout
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+
           </div>
         )}
 

@@ -22,8 +22,12 @@ export default function Home() {
   const [requiredItems, setRequiredItems] = useState('');
   const [description, setDescription] = useState('');
   const [note, setNote] = useState('');
-  const [imageFile, setImageFile] = useState(null); // Obrázek hry
+  const [imageFile, setImageFile] = useState(null);
   const [editImageFile, setEditImageFile] = useState(null);
+
+  // Stavy pro alternativy her
+  const [newAlternativeText, setNewAlternativeText] = useState('');
+  const [alternativeMsg, setAlternativeMsg] = useState('');
 
   // Dynamická pole
   const [customFields, setCustomFields] = useState([]);
@@ -38,14 +42,11 @@ export default function Home() {
   const [selectedGame, setSelectedGame] = useState(null); 
   const [isEditingGame, setIsEditingGame] = useState(false);
   const [editGameForm, setEditGameForm] = useState({});
-  const [favorites, setFavorites] = useState(() => {
-    const saved = localStorage.getItem('favorite_games');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [favorites, setFavorites] = useState([]);
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(false);
   const [showLeaderboardModal, setShowLeaderboardModal] = useState(false);
   const [leaderboardUsers, setLeaderboardUsers] = useState([]);
-  const [leaderboardTab, setLeaderboardTab] = useState('current'); // 'current', 'total-games' nebo 'history'
+  const [leaderboardTab, setLeaderboardTab] = useState('current');
   const [leaderboardHistory, setLeaderboardHistory] = useState([]);
   const [activeLeaderboardInfo, setActiveLeaderboardInfo] = useState(null);
   const [timeLeft, setTimeLeft] = useState('');
@@ -56,7 +57,6 @@ export default function Home() {
   const [settingsError, setSettingsError] = useState('');
   const [settingsLoading, setSettingsLoading] = useState(false);
 
-  // Okamžitá detekce recovery tokenu při startu (uloží příznak do sessionStorage)
   useEffect(() => {
     const hash = window.location.hash;
     if (hash && (hash.includes('type=recovery') || hash.includes('access_token'))) {
@@ -64,7 +64,6 @@ export default function Home() {
     }
   }, []);
 
-  // 1. Řízení načítání profilu a dat
   useEffect(() => {
     if (profile && profile.role !== 'unassigned') {
       fetchGames();
@@ -74,7 +73,24 @@ export default function Home() {
     }
   }, [profile]);
 
-  // Automatické otevření modálního okna pro změnu hesla při příchodu z e-mailu
+  // Načtení oblíbených z databáze Supabase pro přihlášeného uživatele
+  useEffect(() => {
+    const fetchFavorites = async () => {
+      if (user?.id) {
+        const { data, error } = await supabase
+          .from('user_favorites')
+          .select('game_id')
+          .eq('user_id', user.id);
+
+        if (!error && data) {
+          setFavorites(data.map(fav => fav.game_id));
+        }
+      }
+    };
+
+    fetchFavorites();
+  }, [user]);
+
   useEffect(() => {
     const hash = window.location.hash;
     const isResetMode = sessionStorage.getItem('reset_password_mode');
@@ -84,7 +100,6 @@ export default function Home() {
       setSettingsMsg('Zadej své nové heslo níže.');
       sessionStorage.removeItem('reset_password_mode');
       
-      // Vyčištění URL od citlivého hashe
       if (window.history && window.history.replaceState) {
         window.history.replaceState(null, null, window.location.pathname);
       }
@@ -92,11 +107,13 @@ export default function Home() {
   }, []);
 
   const fetchLeaderboard = async () => {
+    // 1. Načteme profily seřazené přímo podle bodů (points)
     const { data: profilesData } = await supabase
       .from('profiles')
       .select('*')
       .order('points', { ascending: false });
 
+    // 2. Načteme aktivní kolo
     const { data: activeData } = await supabase
       .from('active_leaderboard')
       .select('*')
@@ -107,6 +124,7 @@ export default function Home() {
       setActiveLeaderboardInfo(activeData);
     }
 
+    // 3. Načteme schválené hry kvůli počtu her v kole
     const { data: allApprovedGames } = await supabase
       .from('games')
       .select('created_by, created_at, status')
@@ -121,11 +139,7 @@ export default function Home() {
         const periodUserGames = allApprovedGames ? allApprovedGames.filter(g => {
           const isUser = String(g.created_by) === String(u.id);
           if (!isUser) return false;
-          
-          // Pokud nemáme aktivní žebříček (kolo bylo uzavřeno), v aktuálním kole je 0 her
           if (!activeData || !activeData.created_at) return false;
-
-          // Jinak počítáme hry vytvořené od spuštění aktuálního kola
           return new Date(g.created_at) >= new Date(activeData.created_at);
         }).length : 0;
 
@@ -135,6 +149,9 @@ export default function Home() {
           periodGames: periodUserGames
         };
       });
+
+      // Seřadíme je pro jistotu v JS sestupně podle bodů
+      usersWithCounts.sort((a, b) => (b.points || 0) - (a.points || 0));
 
       setLeaderboardUsers(usersWithCounts);
     }
@@ -150,24 +167,6 @@ export default function Home() {
   };
 
   const [pendingCount, setPendingCount] = useState(0);
-
-  useEffect(() => {
-    const cleanFavorites = async () => {
-      if (favorites.length > 0) {
-        const { data: allGames } = await supabase.from('games').select('id');
-        if (allGames) {
-          const existingIds = allGames.map(g => g.id);
-          const validFavorites = favorites.filter(id => existingIds.includes(id));
-          
-          if (validFavorites.length !== favorites.length) {
-            setFavorites(validFavorites);
-            localStorage.setItem('favorite_games', JSON.stringify(validFavorites));
-          }
-        }
-      }
-    };
-    cleanFavorites();
-  }, [games]);
 
   useEffect(() => {
     if (!activeLeaderboardInfo?.ends_at) return;
@@ -192,7 +191,6 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [activeLeaderboardInfo]);
 
-  // Spolehlivé zachycení události obnovení hesla při návratu z e-mailu
   useEffect(() => {
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event) => {
       if (event === 'PASSWORD_RECOVERY') {
@@ -230,13 +228,11 @@ export default function Home() {
     }
   }, [profile]);
 
-  // OPRAVA: Kontrola přihlášení s výjimkou pro obnovu hesla
   useEffect(() => {
     if (!loading && !user) {
       const hash = window.location.hash;
       const isResetMode = sessionStorage.getItem('reset_password_mode');
       
-      // Pokud probíhá obnova hesla, neposíláme uživatele na /login
       if (isResetMode === 'true' || (hash && hash.includes('type=recovery'))) {
         return;
       }
@@ -297,16 +293,9 @@ export default function Home() {
     if (error) {
       setSettingsError('Chyba při změně hesla: ' + error.message);
     } else {
-      // 1. Vyčistíme příznak z paměti
       sessionStorage.removeItem('reset_password_mode');
-      
-      // 2. Odhlásíme uživatele, aby musel projít novým přihlášením
       await supabase.auth.signOut();
-
-      // 3. Zavřeme modální okno
       setShowSettingsModal(false);
-
-      // 4. Přesměrujeme na přihlašovací stránku
       navigate('/login');
     }
   };
@@ -388,13 +377,7 @@ export default function Home() {
     if (error) {
       setMsg('Chyba při ukládání: ' + error.message);
     } else {
-      const currentPoints = profile?.points || 0;
-      await supabase
-        .from('profiles')
-        .update({ points: currentPoints + 10 })
-        .eq('id', user.id);
-
-      setMsg('Hra byla úspěšně odeslána ke schválení! Získáváš +10 bodů.');
+      setMsg('Hra byla úspěšně odeslána ke schválení! Administrátor ji prověří a ohodnotí body.');
       resetForm();
       setShowForm(false);
       fetchGames();
@@ -448,15 +431,33 @@ export default function Home() {
     }
   };
 
-  const toggleFavorite = (gameId, e) => {
+  const toggleFavorite = async (gameId, e) => {
     e.stopPropagation(); 
-    setFavorites((prev) => {
-      const updated = prev.includes(gameId) 
-        ? prev.filter(id => id !== gameId) 
-        : [...prev, gameId];
-      localStorage.setItem('favorite_games', JSON.stringify(updated));
-      return updated;
-    });
+    if (!user?.id) return;
+
+    const isFav = favorites.includes(gameId);
+
+    if (isFav) {
+      const { error } = await supabase
+        .from('user_favorites')
+        .delete()
+        .eq('user_id', user.id)
+        .eq('game_id', gameId);
+
+      if (!error) {
+        setFavorites((prev) => prev.filter(id => id !== gameId));
+      }
+    } else {
+      const { error } = await supabase
+        .from('user_favorites')
+        .insert([
+          { user_id: user.id, game_id: gameId }
+        ]);
+
+      if (!error) {
+        setFavorites((prev) => [...prev, gameId]);
+      }
+    }
   };
 
   const isUnassigned = user && profile?.role === 'unassigned';
@@ -734,7 +735,6 @@ export default function Home() {
                     />
                   </div>
 
-                  {/* VÝBĚR OBRÁZKU */}
                   <div>
                     <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: '#fde047', marginBottom: '4px' }}>Obrázek hry (nepovinné)</label>
                     <input
@@ -897,8 +897,6 @@ export default function Home() {
 
                 {showFilter && (
                   <div style={{ backgroundColor: 'rgba(0,0,0,0.85)', padding: '16px 20px', borderRadius: '12px', border: '1px solid rgba(245, 158, 11, 0.4)', display: 'flex', flexDirection: 'column', gap: '14px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.5)' }}>
-                    
-                    {/* Sekce: Příprava */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fde047' }}>Příprava:</span>
                       <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
@@ -915,7 +913,6 @@ export default function Home() {
                       </div>
                     </div>
 
-                    {/* Sekce: Prostředí */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fde047' }}>Prostředí:</span>
                       <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
@@ -931,7 +928,6 @@ export default function Home() {
                         ))}
                       </div>
                     </div>
-
                   </div>
                 )}
               </div>
@@ -953,7 +949,11 @@ export default function Home() {
                   return (
                     <div
                       key={game.id}
-                      onClick={() => setSelectedGame(game)}
+                      onClick={() => {
+                        setSelectedGame(game);
+                        setNewAlternativeText('');
+                        setAlternativeMsg('');
+                      }}
                       style={{ 
                         backgroundColor: 'rgba(0,0,0,0.85)', 
                         borderRadius: '10px', 
@@ -1007,231 +1007,7 @@ export default function Home() {
               </div>
             )}
 
-            {/* MODÁLNÍ OKNO: ŽEBŘÍČEK A HISTORIE */}
-            {showLeaderboardModal && (
-              <div 
-                style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '16px' }}
-                onClick={() => setShowLeaderboardModal(false)}
-              >
-                <div 
-                  onClick={(e) => e.stopPropagation()} 
-                  style={{ backgroundColor: 'rgba(0, 0, 0, 0.95)', border: '1px solid rgba(245, 158, 11, 0.5)', padding: '32px', borderRadius: '14px', maxWidth: '550px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.9)', position: 'relative', maxHeight: '85vh', overflowY: 'auto', fontFamily: "'Palatino Linotype', 'Book Antiqua', Palatino, serif" }}
-                >
-                  <button
-                    onClick={() => setShowLeaderboardModal(false)}
-                    style={{ position: 'absolute', top: '16px', right: '16px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
-                  >
-                    ✕ Zavřít
-                  </button>
-
-                  <h2 style={{ fontSize: '24px', fontWeight: 'bold', color: '#fde047', textAlign: 'center', marginBottom: '8px' }}>
-                    🏆 {activeLeaderboardInfo?.title || 'Žebříček autorů'}
-                  </h2>
-
-                  {/* Přepínání záložek */}
-                  <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginBottom: '20px', borderBottom: '1px solid rgba(245, 158, 11, 0.3)', paddingBottom: '10px', flexWrap: 'wrap' }}>
-                    <button
-                      onClick={() => setLeaderboardTab('current')}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', color: leaderboardTab === 'current' ? '#fde047' : '#9ca3af', fontFamily: 'inherit' }}
-                    >
-                      🔥 Aktuální
-                    </button>
-                    <button
-                      onClick={() => setLeaderboardTab('total-games')}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', color: leaderboardTab === 'total-games' ? '#fde047' : '#9ca3af', fontFamily: 'inherit' }}
-                    >
-                      📊 Celkem her
-                    </button>
-                    <button
-                      onClick={() => setLeaderboardTab('history')}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '13px', color: leaderboardTab === 'history' ? '#fde047' : '#9ca3af', fontFamily: 'inherit' }}
-                    >
-                      📜 Historie ({leaderboardHistory.length})
-                    </button>
-                  </div>
-
-                  {/* ZÁLOŽKA: AKTUÁLNÍ ŽEBŘÍČEK S ODPOČTEM */}
-                  {leaderboardTab === 'current' && (
-                    <div>
-                      <div style={{ textAlign: 'center', marginBottom: '16px', backgroundColor: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', padding: '8px', borderRadius: '8px' }}>
-                        <span style={{ fontSize: '12px', color: '#fef3c7' }}>⏱️ Do konce kola zbývá: <strong style={{ color: '#fde047' }}>{timeLeft || 'Načítám...'}</strong></span>
-                      </div>
-
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                        {leaderboardUsers.map((u, index) => {
-                          let rankColor = 'white';
-                          if (index === 0) rankColor = '#fde047'; 
-                          else if (index === 1) rankColor = '#9ca3af'; 
-                          else if (index === 2) rankColor = '#b45309'; 
-
-                          return (
-                            <div 
-                              key={u.id} 
-                              style={{ 
-                                display: 'flex', 
-                                justifyContent: 'space-between', 
-                                alignItems: 'center', 
-                                backgroundColor: 'transparent',
-                                padding: '10px 4px', 
-                                borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
-                              }}
-                            >
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <span style={{ fontWeight: 'bold', color: rankColor, width: '24px', fontSize: '16px' }}>
-                                  {index + 1}.
-                                </span>
-                                <span style={{ fontWeight: 'bold', color: rankColor, fontSize: '15px' }}>
-                                  {u.username || 'Neznámý'}
-                                </span>
-                              </div>
-                              <div style={{ display: 'flex', gap: '16px', fontSize: '14px' }}>
-                                <span style={{ color: '#9ca3af' }}>her v kole: <strong style={{ color: 'white' }}>{u.periodGames || 0}</strong></span>
-                                <span style={{ color: rankColor }}><strong>{u.points || 0}</strong> bodů</span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* ZÁLOŽKA: CELKOVÝ POČET HER ZA CELOU DOBU */}
-                  {leaderboardTab === 'total-games' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <p style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'center', marginBottom: '10px' }}>
-                        Celkový přehled všech schválených her napsaných autory napříč všemi sezónami.
-                      </p>
-
-                      {[...leaderboardUsers]
-                        .sort((a, b) => (b.totalGames || 0) - (a.totalGames || 0))
-                        .map((u, index) => {
-                          let rankColor = 'white';
-                          if (index === 0) rankColor = '#fde047'; 
-                          else if (index === 1) rankColor = '#9ca3af'; 
-                          else if (index === 2) rankColor = '#b45309'; 
-
-                          return (
-                            <div 
-                              key={u.id} 
-                              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(17, 24, 39, 0.5)', padding: '10px 12px', borderRadius: '8px', border: '1px solid #374151' }}
-                            >
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                                <span style={{ fontWeight: 'bold', color: rankColor, width: '24px', fontSize: '16px' }}>{index + 1}.</span>
-                                <span style={{ fontWeight: 'bold', color: 'white', fontSize: '15px' }}>{u.username || 'Neznámý'}</span>
-                              </div>
-                              <div style={{ fontSize: '14px' }}>
-                                <span style={{ color: '#fde047' }}><strong> celkem: {u.totalGames || 0}</strong></span>
-                              </div>
-                            </div>
-                          );
-                        })}
-                    </div>
-                  )}
-
-                  {/* ZÁLOŽKA: HISTORIE */}
-                  {leaderboardTab === 'history' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                      {leaderboardHistory.length === 0 ? (
-                        <p style={{ color: '#9ca3af', textAlign: 'center', fontSize: '14px', fontStyle: 'italic' }}>Zatím žádná historie.</p>
-                      ) : (
-                        leaderboardHistory.map((item) => (
-                          <div key={item.id} style={{ backgroundColor: 'rgba(17, 24, 39, 0.6)', padding: '14px', borderRadius: '10px', border: '1px solid #374151' }}>
-                            <h4 style={{ fontSize: '15px', fontWeight: 'bold', color: '#fde047', margin: '0 0 4px 0' }}>{item.title}</h4>
-                            <p style={{ fontSize: '11px', color: '#9ca3af', margin: '0 0 10px 0' }}>Ukončeno: {new Date(item.created_at).toLocaleDateString('cs-CZ')}</p>
-                            
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                              {Array.isArray(item.results) && item.results.map((res, idx) => (
-                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '2px' }}>
-                                  <span>{idx + 1}. {res.username || 'Neznámý'}</span>
-                                  <span style={{ color: '#fde047' }}>{res.points || 0} b.</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-
-                </div>
-              </div>
-            )}
-
-            {/* MODÁLNÍ OKNO: NASTAVENÍ / ZMĚNA HESLA */}
-            {showSettingsModal && (
-              <div 
-                style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '16px' }}
-                onClick={() => setShowSettingsModal(false)}
-              >
-                <div 
-                  onClick={(e) => e.stopPropagation()} 
-                  style={{ backgroundColor: 'rgba(0, 0, 0, 0.95)', border: '1px solid rgba(245, 158, 11, 0.5)', padding: '32px', borderRadius: '14px', maxWidth: '450px', width: '100%', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.9)', position: 'relative', fontFamily: "'Palatino Linotype', 'Book Antiqua', Palatino, serif" }}
-                >
-                  <button
-                    onClick={() => setShowSettingsModal(false)}
-                    style={{ position: 'absolute', top: '16px', right: '16px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 12px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
-                  >
-                    ✕ Zavřít
-                  </button>
-
-                  <h2 style={{ fontSize: '22px', fontWeight: 'bold', color: '#fde047', marginBottom: '16px', textAlign: 'center' }}>
-                    ⚙️ Změna hesla
-                  </h2>
-
-                  {settingsMsg && (
-                    <div style={{ backgroundColor: 'rgba(6, 78, 59, 0.9)', color: '#a7f3d0', padding: '10px 14px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px' }}>
-                      {settingsMsg}
-                    </div>
-                  )}
-
-                  {settingsError && (
-                    <div style={{ backgroundColor: 'rgba(153, 27, 27, 0.9)', color: '#fca5a5', padding: '10px 14px', borderRadius: '8px', marginBottom: '16px', fontSize: '13px' }}>
-                      {settingsError}
-                    </div>
-                  )}
-
-                  <form onSubmit={handlePasswordChange} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: '#fde047', marginBottom: '6px' }}>
-                        Nové heslo
-                      </label>
-                      <input
-                        type="password"
-                        required
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder="Zadej nové heslo..."
-                        style={{ width: '100%', padding: '10px 12px', backgroundColor: 'rgba(17, 24, 39, 0.9)', border: '1px solid #374151', borderRadius: '8px', outline: 'none', color: 'white', fontFamily: 'inherit', fontSize: '14px', boxSizing: 'border-box' }}
-                      />
-                    </div>
-
-                    <div>
-                      <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', color: '#fde047', marginBottom: '6px' }}>
-                        Potvrzení nového hesla
-                      </label>
-                      <input
-                        type="password"
-                        required
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        placeholder="Zadej heslo znovu..."
-                        style={{ width: '100%', padding: '10px 12px', backgroundColor: 'rgba(17, 24, 39, 0.9)', border: '1px solid #374151', borderRadius: '8px', outline: 'none', color: 'white', fontFamily: 'inherit', fontSize: '14px', boxSizing: 'border-box' }}
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={settingsLoading}
-                      style={{ backgroundColor: '#059669', color: 'white', fontWeight: 'bold', padding: '10px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: '14px', marginTop: '8px' }}
-                    >
-                      {settingsLoading ? 'Ukládám...' : '💾 Uložit nové heslo'}
-                    </button>
-                  </form>
-                </div>
-              </div>
-            )}
-
-            {/* MODÁLNÍ OKNO PRO DETAIL HRY */}
+            {/* MODÁLNÍ OKNO PRO DETAIL HRY + COMPLETE EDITACE PRO ADMINA/MODERÁTORA */}
             {selectedGame && (
               <div 
                 style={{ 
@@ -1282,14 +1058,15 @@ export default function Home() {
                     ✕ Zavřít
                   </button>
 
+                  {/* NÁZEV HRY */}
                   {isEditingGame ? (
-                    <div style={{ marginBottom: '20px' }}>
-                      <label style={{ fontSize: '12px', color: '#9ca3af', display: 'block', marginBottom: '4px' }}>Název hry</label>
+                    <div style={{ marginBottom: '16px' }}>
+                      <label style={{ fontSize: '12px', color: '#fde047', display: 'block', marginBottom: '4px' }}>Název hry</label>
                       <input
                         type="text"
                         value={editGameForm.title ?? selectedGame.title}
                         onChange={(e) => setEditGameForm({ ...editGameForm, title: e.target.value })}
-                        style={{ width: '100%', fontSize: '20px', fontWeight: 'bold', backgroundColor: '#111827', border: '1px solid #fde047', borderRadius: '6px', color: '#fde047', padding: '8px 12px', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                        style={{ width: '100%', fontSize: '18px', fontWeight: 'bold', backgroundColor: '#111827', border: '1px solid #fde047', borderRadius: '6px', color: '#fde047', padding: '8px 12px', fontFamily: 'inherit', boxSizing: 'border-box' }}
                       />
                     </div>
                   ) : (
@@ -1298,7 +1075,7 @@ export default function Home() {
                     </h2>
                   )}
 
-                  {/* ZOBRAZENÍ OBRÁZKU HRY V DETAILU */}
+                  {/* OBRÁZEK HRY */}
                   {!isEditingGame && selectedGame.image_url && (
                     <div style={{ marginBottom: '20px', textAlign: 'center' }}>
                       <img 
@@ -1309,6 +1086,7 @@ export default function Home() {
                     </div>
                   )}
 
+                  {/* TLAČÍTKA AKCÍ PRO ADMINA / MODERÁTORA */}
                   {(profile?.role === 'admin' || profile?.role === 'moderator') && (
                     <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginBottom: '16px' }}>
                       {!isEditingGame ? (
@@ -1359,15 +1137,15 @@ export default function Home() {
                     </div>
                   )}
 
+                  {/* EDITACE VŠECH PARAMETRŮ / NEBO JEJICH ZOBRAZENÍ */}
                   {isEditingGame ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '20px', backgroundColor: 'rgba(17, 24, 39, 0.6)', padding: '16px', borderRadius: '10px', border: '1px solid #374151' }}>
                       
-                      {/* ÚPRAVA OBRÁZKU V EDITACI */}
+                      {/* OBRÁZEK */}
                       <div>
                         <label style={{ fontSize: '12px', color: '#fde047', display: 'block', marginBottom: '4px' }}>
                           Obrázek hry
                         </label>
-                        
                         {(editGameForm.image_url ?? selectedGame.image_url) && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
                             <img 
@@ -1384,7 +1162,6 @@ export default function Home() {
                             </button>
                           </div>
                         )}
-
                         <input
                           type="file"
                           accept="image/*"
@@ -1400,7 +1177,7 @@ export default function Home() {
                             type="text"
                             value={editGameForm.players_count ?? selectedGame.players_count ?? ''}
                             onChange={(e) => setEditGameForm({ ...editGameForm, players_count: e.target.value })}
-                            style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit' }}
+                            style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
                           />
                         </div>
                         <div>
@@ -1409,7 +1186,7 @@ export default function Home() {
                             type="text"
                             value={editGameForm.duration ?? selectedGame.duration ?? ''}
                             onChange={(e) => setEditGameForm({ ...editGameForm, duration: e.target.value })}
-                            style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit' }}
+                            style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
                           />
                         </div>
                       </div>
@@ -1421,7 +1198,7 @@ export default function Home() {
                             type="text"
                             value={editGameForm.equipment ?? selectedGame.equipment ?? ''}
                             onChange={(e) => setEditGameForm({ ...editGameForm, equipment: e.target.value })}
-                            style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit' }}
+                            style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
                           />
                         </div>
                         <div>
@@ -1430,7 +1207,7 @@ export default function Home() {
                             type="text"
                             value={editGameForm.required_items ?? selectedGame.required_items ?? ''}
                             onChange={(e) => setEditGameForm({ ...editGameForm, required_items: e.target.value })}
-                            style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit' }}
+                            style={{ width: '100%', padding: '6px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
                           />
                         </div>
                       </div>
@@ -1442,7 +1219,7 @@ export default function Home() {
                             <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '13px', color: 'white' }}>
                               <input
                                 type="radio"
-                                name="edit_preparation"
+                                name="modal_edit_prep"
                                 value={opt}
                                 checked={(editGameForm.preparation ?? selectedGame.preparation) === opt}
                                 onChange={(e) => setEditGameForm({ ...editGameForm, preparation: e.target.value })}
@@ -1483,49 +1260,15 @@ export default function Home() {
                       </div>
 
                       <div>
-                        <label style={{ fontSize: '12px', color: '#fde047', display: 'block', marginBottom: '4px' }}>💬 Poznámka / Vzkaz pro admina (např. požadavek na nové pole)</label>
+                        <label style={{ fontSize: '12px', color: '#fde047', display: 'block', marginBottom: '4px' }}>Pravidla a popis hry</label>
                         <textarea
-                          rows="2"
-                          value={editGameForm.note ?? selectedGame.note ?? ''}
-                          onChange={(e) => setEditGameForm({ ...editGameForm, note: e.target.value })}
-                          placeholder="Napiš administrátorovi, co je potřeba upravit nebo přidat..."
-                          style={{ width: '100%', padding: '8px 10px', backgroundColor: '#000', border: '1px solid #fde047', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }}
+                          rows="6"
+                          value={editGameForm.description ?? selectedGame.description}
+                          onChange={(e) => setEditGameForm({ ...editGameForm, description: e.target.value })}
+                          style={{ width: '100%', padding: '10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '8px', color: 'white', fontSize: '14px', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: '1.5' }}
                         />
                       </div>
-                    </div>
-                  ) : (
-                    <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '24px', display: 'flex', flexWrap: 'wrap', gap: '12px 16px', borderBottom: '1px solid rgba(245, 158, 11, 0.25)', paddingBottom: '16px' }}>
-                      {selectedGame.players_count && <span>👥 <strong>Hráči:</strong> {selectedGame.players_count}</span>}
-                      {selectedGame.duration && <span><strong>Délka:</strong> {selectedGame.duration}</span>}
-                      {selectedGame.preparation && <span><strong>Příprava:</strong> {selectedGame.preparation}</span>}
-                      {selectedGame.environment && (
-                        <span>
-                           <strong>Prostředí:</strong> {typeof selectedGame.environment === 'string' ? selectedGame.environment.replace(/[\[\]"]/g, '') : selectedGame.environment}
-                        </span>
-                      )}
-                      {selectedGame.equipment && <span><strong>Pomůcky:</strong> {selectedGame.equipment}</span>}
-                      {selectedGame.required_items && <span><strong>S sebou:</strong> {selectedGame.required_items}</span>}
 
-                      {selectedGame.custom_data && Object.keys(selectedGame.custom_data).length > 0 && (
-                        Object.entries(selectedGame.custom_data).map(([key, val]) => (
-                          val ? <span key={key}>🏷️ <strong>{key}:</strong> {val}</span> : null
-                        ))
-                      )}
-                    </div>
-                  )}
-                  
-
-                  <h4 style={{ fontSize: '15px', fontWeight: 'bold', color: '#fde047', marginBottom: '8px' }}>
-                    Pravidla a popis hry:
-                  </h4>
-                  {isEditingGame ? (
-                    <div style={{ marginBottom: '20px' }}>
-                      <textarea
-                        rows="6"
-                        value={editGameForm.description ?? selectedGame.description}
-                        onChange={(e) => setEditGameForm({ ...editGameForm, description: e.target.value })}
-                        style={{ width: '100%', padding: '10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '8px', color: 'white', fontSize: '14px', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: '1.5' }}
-                      />
                       <button
                         onClick={async () => {
                           const newTitleToCheck = editGameForm.title ?? selectedGame.title;
@@ -1582,25 +1325,238 @@ export default function Home() {
                             setIsEditingGame(false);
                             setEditImageFile(null);
                             fetchGames();
+                            alert('✅ Hra byla úspěšně upravena a uložena!');
                           } else {
                             alert('Chyba při ukládání: ' + error.message);
                           }
                         }}
-                        style={{ marginTop: '10px', backgroundColor: '#059669', color: 'white', fontWeight: 'bold', padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', width: '100%' }}
+                        style={{ marginTop: '10px', backgroundColor: '#059669', color: 'white', fontWeight: 'bold', padding: '10px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontSize: '13px', width: '100%' }}
                       >
                         💾 Uložit změny
                       </button>
                     </div>
                   ) : (
-                    <p style={{ color: '#d1d5db', fontSize: '14px', whiteSpace: 'pre-line', lineHeight: '1.6', margin: 0 }}>
-                      {selectedGame.description}
-                    </p>
+                    <>
+                      <div style={{ fontSize: '13px', color: '#9ca3af', marginBottom: '24px', display: 'flex', flexWrap: 'wrap', gap: '12px 16px', borderBottom: '1px solid rgba(245, 158, 11, 0.25)', paddingBottom: '16px' }}>
+                        {selectedGame.players_count && <span>👥 <strong>Hráči:</strong> {selectedGame.players_count}</span>}
+                        {selectedGame.duration && <span>⏱️ <strong>Délka:</strong> {selectedGame.duration}</span>}
+                        {selectedGame.preparation && <span>🛠️ <strong>Příprava:</strong> {selectedGame.preparation}</span>}
+                        {selectedGame.environment && (
+                          <span>
+                            📍 <strong>Prostředí:</strong> {typeof selectedGame.environment === 'string' ? selectedGame.environment.replace(/[\[\]"]/g, '') : selectedGame.environment}
+                          </span>
+                        )}
+                        {selectedGame.equipment && <span>🎒 <strong>Pomůcky:</strong> {selectedGame.equipment}</span>}
+                        {selectedGame.required_items && <span>🎒 <strong>S sebou:</strong> {selectedGame.required_items}</span>}
+                      </div>
+
+                      <h4 style={{ fontSize: '15px', fontWeight: 'bold', color: '#fde047', marginBottom: '8px' }}>
+                        Pravidla a popis hry:
+                      </h4>
+                      <p style={{ color: '#d1d5db', fontSize: '14px', whiteSpace: 'pre-line', lineHeight: '1.6', margin: 0 }}>
+                        {selectedGame.description}
+                      </p>
+                    </>
                   )}
+
+                  {/* ALTERNATIVY HRY */}
+                  {!isEditingGame && selectedGame.alternatives && selectedGame.alternatives.length > 0 && (
+                    <div style={{ marginTop: '24px', borderTop: '1px solid rgba(245, 158, 11, 0.25)', paddingTop: '16px' }}>
+                      <h4 style={{ fontSize: '15px', fontWeight: 'bold', color: '#fde047', marginBottom: '8px' }}>
+                        🔄 Alternativy hry:
+                      </h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {selectedGame.alternatives.map((alt, index) => (
+                          <div key={index} style={{ backgroundColor: 'rgba(17, 24, 39, 0.7)', padding: '10px 14px', borderRadius: '8px', border: '1px solid #374151', fontSize: '13px', color: '#d1d5db', lineHeight: '1.5' }}>
+                            {alt}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* FORMULÁŘ PRO ZAPSÁNÍ NOVÉ ALTERNATIVY */}
+                  {!isEditingGame && (
+                    <div style={{ marginTop: '24px', borderTop: '1px solid rgba(245, 158, 11, 0.25)', paddingTop: '16px' }}>
+                      <h4 style={{ fontSize: '14px', fontWeight: 'bold', color: '#fde047', marginBottom: '6px' }}>
+                        Máš vlastní alternativu této hry? Napiš ji sem:
+                      </h4>
+                      {alternativeMsg && (
+                        <div style={{ fontSize: '12px', color: '#a7f3d0', marginBottom: '8px' }}>{alternativeMsg}</div>
+                      )}
+                      <textarea
+                        rows="2"
+                        value={newAlternativeText}
+                        onChange={(e) => setNewAlternativeText(e.target.value)}
+                        placeholder="Např. Lze hrát i v místnosti bez běhání..."
+                        style={{ width: '100%', padding: '8px 10px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box', marginBottom: '8px' }}
+                      />
+                      <button
+                        onClick={async () => {
+                          if (!newAlternativeText.trim()) return;
+                          const { error } = await supabase.from('game_alternatives').insert([
+                            {
+                              game_id: selectedGame.id,
+                              user_id: user.id,
+                              content: newAlternativeText.trim(),
+                              status: 'pending'
+                            }
+                          ]);
+                          if (!error) {
+                            setAlternativeMsg('✅ Alternativa byla odeslána administrátorovi ke schválení!');
+                            setNewAlternativeText('');
+                          } else {
+                            alert('Chyba při odesílání alternativy: ' + error.message);
+                          }
+                        }}
+                        style={{ backgroundColor: '#2563eb', color: 'white', fontWeight: 'bold', padding: '6px 14px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '12px', fontFamily: 'inherit' }}
+                      >
+                        Odeslat alternativu ke schválení
+                      </button>
+                    </div>
+                  )}
+
                 </div>
               </div>
             )}
           </>
         )}
+        {/* MODÁLNÍ OKNO PRO ŽEBŘÍČEK */}
+            {showLeaderboardModal && (
+              <div 
+                style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '16px' }}
+                onClick={() => setShowLeaderboardModal(false)}
+              >
+                <div 
+                  onClick={(e) => e.stopPropagation()} 
+                  style={{ backgroundColor: 'rgba(0, 0, 0, 0.95)', border: '1px solid rgba(245, 158, 11, 0.5)', padding: '24px', borderRadius: '14px', maxWidth: '500px', width: '100%', maxHeight: '80vh', overflowY: 'auto', position: 'relative' }}
+                >
+                  <button
+                    onClick={() => setShowLeaderboardModal(false)}
+                    style={{ position: 'absolute', top: '12px', right: '12px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
+                  >
+                    ✕
+                  </button>
+
+                  <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#fde047', marginBottom: '16px', textAlign: 'center' }}>
+                    🏆 Žebříček {activeLeaderboardInfo?.title ? `- ${activeLeaderboardInfo.title}` : ''}
+                  </h2>
+
+                  {activeLeaderboardInfo?.ends_at && (
+                    <div style={{ textAlign: 'center', fontSize: '13px', color: '#9ca3af', marginBottom: '16px' }}>
+                      Konec kola za: <strong style={{ color: '#fde047' }}>{timeLeft || 'Načítám...'}</strong>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', justifyContent: 'center' }}>
+                    <button
+                      onClick={() => setLeaderboardTab('current')}
+                      style={{ backgroundColor: leaderboardTab === 'current' ? '#d97706' : '#1f2937', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
+                    >
+                      Aktuální kolo
+                    </button>
+                    <button
+                      onClick={() => setLeaderboardTab('history')}
+                      style={{ backgroundColor: leaderboardTab === 'history' ? '#d97706' : '#1f2937', color: 'white', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold' }}
+                    >
+                      Historie
+                    </button>
+                  </div>
+
+                  {leaderboardTab === 'current' ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {leaderboardUsers.length === 0 ? (
+                        <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px' }}>Žádní uživatelé v žebříčku.</p>
+                      ) : (
+                        leaderboardUsers.map((u, index) => (
+                          <div key={u.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(17, 24, 39, 0.8)', padding: '10px 14px', borderRadius: '8px', border: '1px solid #374151', fontSize: '13px' }}>
+                            <span>{index + 1}. <strong>{u.username || 'Neznámý'}</strong></span>
+                            <span style={{ color: '#fde047', fontWeight: 'bold' }}>{u.points || 0} bodů</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {leaderboardHistory.length === 0 ? (
+                        <p style={{ textAlign: 'center', color: '#9ca3af', fontSize: '13px' }}>Žádná historie.</p>
+                      ) : (
+                        leaderboardHistory.map((item) => (
+                          <div key={item.id} style={{ backgroundColor: 'rgba(17, 24, 39, 0.8)', padding: '12px', borderRadius: '8px', border: '1px solid #374151' }}>
+                            <div style={{ fontWeight: 'bold', color: '#fde047', marginBottom: '6px', fontSize: '13px' }}>{item.title}</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                              {Array.isArray(item.results) && item.results.map((res, idx) => (
+                                <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: '#d1d5db' }}>
+                                  <span>{idx + 1}. {res.username || 'Neznámý'}</span>
+                                  <span style={{ color: '#fde047' }}>{res.points || 0} b.</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* MODÁLNÍ OKNO PRO NASTAVENÍ / ZMĚNU HESLA */}
+            {showSettingsModal && (
+              <div 
+                style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '16px' }}
+                onClick={() => setShowSettingsModal(false)}
+              >
+                <div 
+                  onClick={(e) => e.stopPropagation()} 
+                  style={{ backgroundColor: 'rgba(0, 0, 0, 0.95)', border: '1px solid rgba(245, 158, 11, 0.5)', padding: '24px', borderRadius: '14px', maxWidth: '400px', width: '100%', position: 'relative' }}
+                >
+                  <button
+                    onClick={() => setShowSettingsModal(false)}
+                    style={{ position: 'absolute', top: '12px', right: '12px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', padding: '4px 8px', cursor: 'pointer', fontWeight: 'bold', fontSize: '12px' }}
+                  >
+                    ✕
+                  </button>
+
+                  <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#fde047', marginBottom: '14px', textAlign: 'center' }}>
+                    ⚙️ Nastavení účtu / Změna hesla
+                  </h2>
+
+                  {settingsMsg && <div style={{ color: '#a7f3d0', fontSize: '12px', marginBottom: '10px' }}>{settingsMsg}</div>}
+                  {settingsError && <div style={{ color: '#fca5a5', fontSize: '12px', marginBottom: '10px' }}>{settingsError}</div>}
+
+                  <form onSubmit={handlePasswordChange} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Nové heslo</label>
+                      <input
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="Minimálně 6 znaků"
+                        style={{ width: '100%', padding: '8px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', boxSizing: 'border-box' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '12px', color: '#9ca3af', marginBottom: '4px' }}>Potvrzení nového hesla</label>
+                      <input
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="Zadej heslo znovu"
+                        style={{ width: '100%', padding: '8px', backgroundColor: '#000', border: '1px solid #374151', borderRadius: '6px', color: 'white', fontSize: '13px', boxSizing: 'border-box' }}
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={settingsLoading}
+                      style={{ backgroundColor: '#059669', color: 'white', fontWeight: 'bold', padding: '8px', borderRadius: '6px', border: 'none', cursor: 'pointer', fontSize: '13px', marginTop: '4px' }}
+                    >
+                      {settingsLoading ? 'Ukládám...' : 'Změnit heslo'}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
       </div>
     </div>
   );
